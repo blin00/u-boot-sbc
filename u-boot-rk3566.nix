@@ -19,6 +19,7 @@ let
 in
 buildUBoot {
   inherit defconfig src version;
+  extraMeta.platforms = [ "aarch64-linux" ];
   filesToInstall =
     if spi then
       [
