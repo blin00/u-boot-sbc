@@ -1,0 +1,61 @@
+commit 520e667686b1a03eb34bf1f89a69333f85d1f948
+Author: Brandon Lin <blin00@gmail.com>
+Date:   Thu May 14 06:54:15 2026 -0700
+
+    don't start watchdog
+
+diff --git a/configs/devterm_r_01_defconfig b/configs/devterm_r_01_defconfig
+index 4f15f5ee68b..32a989bf3c3 100644
+--- a/configs/devterm_r_01_defconfig
++++ b/configs/devterm_r_01_defconfig
+@@ -15,3 +15,4 @@ CONFIG_DRAM_SUNXI_TPR0=0x004a2195
+ CONFIG_DRAM_SUNXI_TPR11=0x00870000
+ CONFIG_DRAM_SUNXI_TPR12=0x00000024
+ CONFIG_DRAM_SUNXI_TPR13=0x34050100
++CONFIG_WATCHDOG_AUTOSTART=n
+diff --git a/configs/dongshan_nezha_stu_defconfig b/configs/dongshan_nezha_stu_defconfig
+index b86c1501aec..13ba86a6832 100644
+--- a/configs/dongshan_nezha_stu_defconfig
++++ b/configs/dongshan_nezha_stu_defconfig
+@@ -18,3 +18,4 @@ CONFIG_DRAM_SUNXI_TPR0=0x004a2195
+ CONFIG_DRAM_SUNXI_TPR11=0x00870000
+ CONFIG_DRAM_SUNXI_TPR12=0x00000024
+ CONFIG_DRAM_SUNXI_TPR13=0x34050100
++CONFIG_WATCHDOG_AUTOSTART=n
+diff --git a/configs/lichee_rv_86_panel_defconfig b/configs/lichee_rv_86_panel_defconfig
+index 20c884d95ba..261d59afed2 100644
+--- a/configs/lichee_rv_86_panel_defconfig
++++ b/configs/lichee_rv_86_panel_defconfig
+@@ -18,3 +18,4 @@ CONFIG_DRAM_SUNXI_TPR0=0x004a2195
+ CONFIG_DRAM_SUNXI_TPR11=0x00870000
+ CONFIG_DRAM_SUNXI_TPR12=0x00000024
+ CONFIG_DRAM_SUNXI_TPR13=0x34050100
++CONFIG_WATCHDOG_AUTOSTART=n
+diff --git a/configs/lichee_rv_dock_defconfig b/configs/lichee_rv_dock_defconfig
+index 187b3d610b0..06cfe26fe70 100644
+--- a/configs/lichee_rv_dock_defconfig
++++ b/configs/lichee_rv_dock_defconfig
+@@ -15,3 +15,4 @@ CONFIG_DRAM_SUNXI_TPR0=0x004a2195
+ CONFIG_DRAM_SUNXI_TPR11=0x00870000
+ CONFIG_DRAM_SUNXI_TPR12=0x00000024
+ CONFIG_DRAM_SUNXI_TPR13=0x34050100
++CONFIG_WATCHDOG_AUTOSTART=n
+diff --git a/configs/mangopi_mq_pro_defconfig b/configs/mangopi_mq_pro_defconfig
+index 0d929f6d1dc..9bc9e8919ad 100644
+--- a/configs/mangopi_mq_pro_defconfig
++++ b/configs/mangopi_mq_pro_defconfig
+@@ -15,3 +15,4 @@ CONFIG_DRAM_SUNXI_TPR0=0x004a2195
+ CONFIG_DRAM_SUNXI_TPR11=0x00870000
+ CONFIG_DRAM_SUNXI_TPR12=0x00000024
+ CONFIG_DRAM_SUNXI_TPR13=0x34050100
++CONFIG_WATCHDOG_AUTOSTART=n
+diff --git a/configs/nezha_defconfig b/configs/nezha_defconfig
+index 65e0fb5b4f1..f7fd3d4cd9c 100644
+--- a/configs/nezha_defconfig
++++ b/configs/nezha_defconfig
+@@ -18,4 +18,5 @@ CONFIG_DRAM_SUNXI_TPR0=0x004a2195
+ CONFIG_DRAM_SUNXI_TPR11=0x00870000
+ CONFIG_DRAM_SUNXI_TPR12=0x00000024
+ CONFIG_DRAM_SUNXI_TPR13=0x34050100
++CONFIG_WATCHDOG_AUTOSTART=n
+ CONFIG_VIDEO=y

@@ -1,0 +1,57 @@
+commit 777714693e37ef5555d634fa2d9862e5f608c381
+Author: Brandon Lin <blin00@gmail.com>
+Date:   Thu May 14 06:45:15 2026 -0700
+
+    fixes for sun20i
+    
+    * populate memory node in devicetree
+    * fix fdtfile path missing "allwinner/" prefix
+    * use load addresses for >= 512MB memory to allow loading large kernels
+
+diff --git a/board/sunxi/board-riscv.c b/board/sunxi/board-riscv.c
+index 1c403363737..b65f7e3379f 100644
+--- a/board/sunxi/board-riscv.c
++++ b/board/sunxi/board-riscv.c
+@@ -538,10 +538,9 @@ int misc_init_r(void)
+ 	/* Set fdtfile to match the FIT configuration chosen in SPL. */
+ 	spl_dt_name = get_spl_dt_name();
+ 	if (spl_dt_name) {
+-		char *prefix = IS_ENABLED(CONFIG_ARM64) ? "allwinner/" : "";
+ 		char str[64];
+ 
+-		snprintf(str, sizeof(str), "%s%s.dtb", prefix, spl_dt_name);
++		snprintf(str, sizeof(str), "allwinner/%s.dtb", spl_dt_name);
+ 		env_set("fdtfile", str);
+ 	}
+ 
+@@ -612,6 +611,8 @@ int ft_board_setup(void *blob, struct bd_info *bd)
+ 
+ 	bluetooth_dt_fixup(blob);
+ 
++	fdt_fixup_memory(blob, bd->bi_dram[0].start, bd->bi_dram[0].size);
++
+ #ifdef CONFIG_VIDEO_DT_SIMPLEFB
+ 	r = sunxi_simplefb_setup(blob);
+ 	if (r)
+diff --git a/include/configs/sunxi-common.h b/include/configs/sunxi-common.h
+index b8ca77d031d..09920e5c592 100644
+--- a/include/configs/sunxi-common.h
++++ b/include/configs/sunxi-common.h
+@@ -99,7 +99,7 @@
+ 
+ /* Ethernet support */
+ 
+-#ifdef CONFIG_ARM64
++#if defined(CONFIG_ARM64) || defined(CONFIG_RISCV)
+ /*
+  * Boards seem to come with at least 512MB of DRAM.
+  * The kernel should go at 512K, which is the default text offset (that will
+@@ -312,7 +312,7 @@
+ 	CONSOLE_STDIN_SETTINGS \
+ 	CONSOLE_STDOUT_SETTINGS
+ 
+-#ifdef CONFIG_ARM64
++#if defined(CONFIG_ARM64) || defined(CONFIG_RISCV)
+ #define FDTFILE "allwinner/" CONFIG_DEFAULT_DEVICE_TREE ".dtb"
+ #else
+ #define FDTFILE CONFIG_DEFAULT_DEVICE_TREE ".dtb"
