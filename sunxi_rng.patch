@@ -1,0 +1,328 @@
+commit b1b2c01cfe22597a402be5a46167732004d6190b
+Author: Brandon Lin <blin00@gmail.com>
+Date:   Wed Nov 18 17:19:31 2026 -0800
+
+    add sunxi rng driver and enable for orange pi zero 3
+
+diff --git a/configs/orangepi_zero3_defconfig b/configs/orangepi_zero3_defconfig
+index 7586c73b24f..9654729740c 100644
+--- a/configs/orangepi_zero3_defconfig
++++ b/configs/orangepi_zero3_defconfig
+@@ -30,3 +30,5 @@ CONFIG_SPI=y
+ CONFIG_USB_EHCI_HCD=y
+ CONFIG_USB_OHCI_HCD=y
+ CONFIG_USB_MUSB_GADGET=y
++CONFIG_DM_RNG=y
++CONFIG_RNG_SUNXI=y
+diff --git a/drivers/clk/sunxi/clk_h616.c b/drivers/clk/sunxi/clk_h616.c
+index 3e7eea25bfe..d5b659d0bb2 100644
+--- a/drivers/clk/sunxi/clk_h616.c
++++ b/drivers/clk/sunxi/clk_h616.c
+@@ -19,6 +19,10 @@ static struct ccu_clk_gate h616_gates[] = {
+ 	[CLK_DE]		= GATE(0x600, BIT(31)),
+ 	[CLK_BUS_DE]		= GATE(0x60c, BIT(0)),
+ 
++	[CLK_CE]		= GATE(0x680, BIT(31)),
++	[CLK_BUS_CE]		= GATE(0x68c, BIT(0)),
++
++	[CLK_MBUS_CE]		= GATE(0x804, BIT(2)),
+ 	[CLK_MBUS_NAND]		= GATE(0x804, BIT(5)),
+ 
+ 	[CLK_NAND0]		= GATE(0x810, BIT(31)),
+@@ -86,6 +90,7 @@ static struct ccu_clk_gate h616_gates[] = {
+ 
+ static struct ccu_reset h616_resets[] = {
+ 	[RST_BUS_DE]		= RESET(0x60c, BIT(16)),
++	[RST_BUS_CE]		= RESET(0x68c, BIT(16)),
+ 	[RST_BUS_NAND]		= RESET(0x82c, BIT(16)),
+ 
+ 	[RST_BUS_MMC0]		= RESET(0x84c, BIT(16)),
+diff --git a/drivers/rng/Kconfig b/drivers/rng/Kconfig
+index bacb026308b..801c4f26e2b 100644
+--- a/drivers/rng/Kconfig
++++ b/drivers/rng/Kconfig
+@@ -140,4 +140,12 @@ config RNG_EXYNOS
+ 	  case the LDFW (Loadable Firmware) has to be loaded first, as it
+ 	  actually implements TRNG SMC calls.
+ 
++config RNG_SUNXI
++	bool "Allwinner sunxi Random Number Generator support"
++	depends on DM_RNG && ARM
++	help
++	  Enable support for the True Random Number Generator (TRNG)
++	  in the crypto module available on sunxi SoCs. Currently only
++	  the H616 family is supported.
++
+ endif
+diff --git a/drivers/rng/Makefile b/drivers/rng/Makefile
+index 50622d4705f..bb192cfa00b 100644
+--- a/drivers/rng/Makefile
++++ b/drivers/rng/Makefile
+@@ -20,3 +20,4 @@ obj-$(CONFIG_TPM_RNG) += tpm_rng.o
+ obj-$(CONFIG_RNG_JH7110) += jh7110_rng.o
+ obj-$(CONFIG_RNG_TURRIS_RWTM) += turris_rwtm_rng.o
+ obj-$(CONFIG_RNG_EXYNOS) += exynos-trng.o
++obj-$(CONFIG_RNG_SUNXI) += sunxi_rng.o
+diff --git a/drivers/rng/sunxi_rng.c b/drivers/rng/sunxi_rng.c
+new file mode 100644
+index 00000000000..e28a28b4242
+--- /dev/null
++++ b/drivers/rng/sunxi_rng.c
+@@ -0,0 +1,257 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * Driver for the True Random Number Generator in the Allwinner Crypto Engine.
++ *
++ * The task descriptor layout and the programming sequence follow the Linux
++ * sun8i-ce driver by Corentin Labbe.
++ */
++
++#include <clk.h>
++#include <dm.h>
++#include <reset.h>
++#include <rng.h>
++#include <asm/cache.h>
++#include <asm/io.h>
++#include <dm/device_compat.h>
++#include <linux/bitfield.h>
++#include <linux/bitops.h>
++#include <linux/dma-mapping.h>
++#include <linux/iopoll.h>
++#include <linux/kernel.h>
++
++#define CE_TDQ			0x00
++#define CE_ICR			0x08
++#define CE_ISR			0x0c
++#define CE_TLR			0x10
++#define CE_ESR			0x18
++
++#define CE_TLR_LOAD		BIT(0)
++#define CE_TLR_ALG		GENMASK(14, 8)
++
++#define CE_COMM_INT		BIT(31)
++#define CE_ALG_TRNG_V2		0x1c
++
++#define CE_MAX_SG		8
++
++/* Linux reserves flow 3 for the RNGs, use the same one */
++#define CE_RNG_FLOW		3
++#define CE_TIMEOUT_US		(3 * 1000 * 1000)
++
++/* Like Linux, always request a multiple of 32 bytes from the TRNG */
++#define CE_TRNG_BLOCK_SIZE	32
++#define SUNXI_RNG_BUF_SIZE	256
++
++struct sunxi_ce_sg {
++	__le32 addr;
++	__le32 len;
++};
++
++struct sunxi_ce_task {
++	__le32 t_id;
++	__le32 t_common_ctl;
++	__le32 t_sym_ctl;
++	__le32 t_asym_ctl;
++	__le32 t_key;
++	__le32 t_iv;
++	__le32 t_ctr;
++	__le32 t_dlen;
++	struct sunxi_ce_sg t_src[CE_MAX_SG];
++	struct sunxi_ce_sg t_dst[CE_MAX_SG];
++	__le32 next;
++	__le32 reserved[3];
++};
++
++struct sunxi_rng_data {
++	int (*sunxi_rng_read)(struct udevice *dev, void *data, size_t len);
++};
++
++struct sunxi_rng_priv {
++	void __iomem *base;
++	struct clk_bulk clks;
++	struct reset_ctl reset;
++	const struct sunxi_rng_data *data;
++	/*
++	 * Accessed by the CE through DMA, so these must not share cache lines
++	 * with anything else (see DM_FLAG_ALLOC_PRIV_DMA).
++	 */
++	struct sunxi_ce_task task __aligned(ARCH_DMA_MINALIGN);
++	u8 buf[SUNXI_RNG_BUF_SIZE] __aligned(ARCH_DMA_MINALIGN);
++};
++
++/*
++ * The H616 CE expects all DMA addresses, both in the TDQ register and in the
++ * task descriptor, in units of 32-bit words rather than bytes.
++ */
++static u32 sunxi_h616_ce_addr(dma_addr_t addr)
++{
++	return addr >> 2;
++}
++
++/* Fill the first @len bytes of priv->buf, @len must be a multiple of 32 */
++static int sunxi_h616_run_trng_task(struct udevice *dev, size_t len)
++{
++	struct sunxi_rng_priv *priv = dev_get_priv(dev);
++	struct sunxi_ce_task *task = &priv->task;
++	dma_addr_t task_dma, buf_dma;
++	u32 isr, esr;
++	int ret;
++
++	buf_dma = dma_map_single(priv->buf, len, DMA_FROM_DEVICE);
++
++	memset(task, 0, sizeof(*task));
++	task->t_id = cpu_to_le32(CE_RNG_FLOW);
++	task->t_common_ctl = cpu_to_le32(CE_ALG_TRNG_V2 | CE_COMM_INT);
++	/* The total length is in bytes, the scatter list length in words */
++	task->t_dlen = cpu_to_le32(len);
++	task->t_dst[0].addr = cpu_to_le32(sunxi_h616_ce_addr(buf_dma));
++	task->t_dst[0].len = cpu_to_le32(len / 4);
++	task_dma = dma_map_single(task, sizeof(*task), DMA_TO_DEVICE);
++
++	/* Completion is signalled via the flow's interrupt status, poll it */
++	setbits_le32(priv->base + CE_ICR, BIT(CE_RNG_FLOW));
++	writel(BIT(CE_RNG_FLOW), priv->base + CE_ISR);
++	writel(sunxi_h616_ce_addr(task_dma), priv->base + CE_TDQ);
++	writel(CE_TLR_LOAD | FIELD_PREP(CE_TLR_ALG, CE_ALG_TRNG_V2),
++	       priv->base + CE_TLR);
++
++	ret = readl_poll_timeout(priv->base + CE_ISR, isr,
++				 isr & BIT(CE_RNG_FLOW), CE_TIMEOUT_US);
++	writel(BIT(CE_RNG_FLOW), priv->base + CE_ISR);
++
++	dma_unmap_single(task_dma, sizeof(*task), DMA_TO_DEVICE);
++	dma_unmap_single(buf_dma, len, DMA_FROM_DEVICE);
++
++	if (ret) {
++		dev_err(dev, "TRNG task timed out\n");
++		return ret;
++	}
++
++	/* Each flow has its own 8-bit error field */
++	esr = (readl(priv->base + CE_ESR) >> (CE_RNG_FLOW * 8)) & 0xff;
++	if (esr) {
++		dev_err(dev, "TRNG task failed, ESR 0x%02x\n", esr);
++		return -EIO;
++	}
++
++	return 0;
++}
++
++static int sunxi_h616_rng_read(struct udevice *dev, void *data, size_t len)
++{
++	struct sunxi_rng_priv *priv = dev_get_priv(dev);
++	u8 *out = data;
++	int ret = 0;
++
++	/* For simplicity, only enqueue one descriptor at a time */
++	while (len) {
++		size_t chunk = min(len, sizeof(priv->buf));
++		size_t todo = roundup(chunk, CE_TRNG_BLOCK_SIZE);
++
++		ret = sunxi_h616_run_trng_task(dev, todo);
++		if (ret)
++			break;
++
++		memcpy(out, priv->buf, chunk);
++		out += chunk;
++		len -= chunk;
++	}
++
++	/* Don't leave random data lying around in memory */
++	memset(priv->buf, 0, sizeof(priv->buf));
++
++	return ret;
++}
++
++static int sunxi_rng_read(struct udevice *dev, void *data, size_t len)
++{
++	struct sunxi_rng_priv *priv = dev_get_priv(dev);
++
++	return priv->data->sunxi_rng_read(dev, data, len);
++}
++
++static int sunxi_rng_probe(struct udevice *dev)
++{
++	struct sunxi_rng_priv *priv = dev_get_priv(dev);
++	int ret;
++
++	ret = clk_enable_bulk(&priv->clks);
++	if (ret) {
++		dev_err(dev, "failed to enable clocks: %d\n", ret);
++		return ret;
++	}
++
++	ret = reset_deassert(&priv->reset);
++	if (ret) {
++		dev_err(dev, "failed to deassert reset: %d\n", ret);
++		clk_disable_bulk(&priv->clks);
++		return ret;
++	}
++
++	return 0;
++}
++
++static int sunxi_rng_remove(struct udevice *dev)
++{
++	struct sunxi_rng_priv *priv = dev_get_priv(dev);
++	int ret;
++
++	ret = reset_assert(&priv->reset);
++	if (ret)
++		return ret;
++
++	return clk_disable_bulk(&priv->clks);
++}
++
++static int sunxi_rng_of_to_plat(struct udevice *dev)
++{
++	struct sunxi_rng_priv *priv = dev_get_priv(dev);
++	int ret;
++
++	priv->data = (const struct sunxi_rng_data *)dev_get_driver_data(dev);
++
++	priv->base = dev_read_addr_ptr(dev);
++	if (!priv->base)
++		return -EINVAL;
++
++	ret = clk_get_bulk(dev, &priv->clks);
++	if (ret) {
++		dev_err(dev, "failed to get clocks: %d\n", ret);
++		return ret;
++	}
++
++	ret = reset_get_by_index(dev, 0, &priv->reset);
++	if (ret) {
++		dev_err(dev, "failed to get reset: %d\n", ret);
++		return ret;
++	}
++
++	return 0;
++}
++
++static const struct sunxi_rng_data sunxi_h616_data = {
++	.sunxi_rng_read = sunxi_h616_rng_read,
++};
++
++static const struct dm_rng_ops sunxi_rng_ops = {
++	.read = sunxi_rng_read,
++};
++
++static const struct udevice_id sunxi_rng_match[] = {
++	{
++		.compatible = "allwinner,sun50i-h616-crypto",
++		.data = (ulong)&sunxi_h616_data,
++	},
++	{},
++};
++
++U_BOOT_DRIVER(sunxi_rng) = {
++	.name = "sunxi-rng",
++	.id = UCLASS_RNG,
++	.of_match = sunxi_rng_match,
++	.ops = &sunxi_rng_ops,
++	.probe = sunxi_rng_probe,
++	.remove = sunxi_rng_remove,
++	.of_to_plat = sunxi_rng_of_to_plat,
++	.priv_auto	= sizeof(struct sunxi_rng_priv),
++	.flags = DM_FLAG_ALLOC_PRIV_DMA,
++};
