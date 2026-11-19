@@ -1,10 +1,11 @@
 {
   inputs.nixpkgs.url = "nixpkgs/nixos-unstable";
+  inputs.nixpkgs-2605.url = "nixpkgs/nixos-26.05";
   inputs.flake-utils.url = "github:numtide/flake-utils";
 
-  outputs = { self, nixpkgs, flake-utils }: flake-utils.lib.eachSystem flake-utils.lib.allSystems (system:
+  outputs = { self, nixpkgs, nixpkgs-2605, flake-utils }: flake-utils.lib.eachSystem flake-utils.lib.allSystems (system:
     {
-      packages = (let pkgs = nixpkgs.legacyPackages.${system}.pkgsCross.riscv64; in {
+      packages = (let pkgs = nixpkgs-2605.legacyPackages.${system}.pkgsCross.riscv64; in {
         # write these starting at sector 16 or 256
         ubootMangoPiMQPro = pkgs.callPackage ./u-boot-d1.nix { defconfig = "mangopi_mq_pro_defconfig"; };
         # remaining risc-v images are untested
